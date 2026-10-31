@@ -135,4 +135,33 @@ cd "$OUT_DIR"
 sha256sum libmihomo-arm64-v8a.so libmihomo-armeabi-v7a.so libmihomo-x86_64.so | tee SHA256SUMS
 ls -l libmihomo-*.so | sed 's/^/[mihomet-core]   /'
 
-log "Done. Artifacts in $OUT_DIR (upload these to the GitHub release $CORE_VERSION)"
+# --- Signed update manifest (consumed by the app's CoreUpdateVerifier) ---
+# The in-app updater refuses any release without a validly signed manifest.json,
+# so this is a mandatory release artifact, not an optional extra.
+# Set CORE_MANIFEST_KEY to the RSA private key PEM (repo-external secret, e.g.
+# /secure/path/core-update-priv.pem matching the app's CORE_UPDATE_PUBLIC_KEY_B64)
+# to also produce manifest.json.sig; the manifest itself is always generated.
+MIN_APP_VERSION="${CORE_MIN_APP_VERSION:-1.2.1}"
+python3 - "$CORE_VERSION" "$MIN_APP_VERSION" > manifest.json <<'PYEOF'
+import json, sys, hashlib
+version, min_app = sys.argv[1], sys.argv[2]
+artifacts = {}
+for abi in ("arm64-v8a", "armeabi-v7a", "x86_64"):
+    f = f"libmihomo-{abi}.so"
+    data = open(f, "rb").read()
+    artifacts[abi] = {"file": f, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+print(json.dumps({"schema": 1, "version": version, "minAppVersion": min_app,
+                  "artifacts": artifacts}, indent=2))
+PYEOF
+if [ -n "${CORE_MANIFEST_KEY:-}" ]; then
+  [ -f "$CORE_MANIFEST_KEY" ] || die "CORE_MANIFEST_KEY set but file not found: $CORE_MANIFEST_KEY"
+  openssl dgst -sha256 -sign "$CORE_MANIFEST_KEY" -out manifest.json.sig manifest.json
+  log "Manifest signed (key: $CORE_MANIFEST_KEY)"
+else
+  log "WARNING: CORE_MANIFEST_KEY not set — manifest.json is UNSIGNED. Sign it with"
+  log "         the mihomet app repo script scripts/sign-core-manifest.sh before release!"
+fi
+cat manifest.json | sed 's/^/[mihomet-core]   /'
+
+log "Done. Artifacts in $OUT_DIR (upload these to the GitHub release $CORE_VERSION:"
+log "  libmihomo-<abi>.so, SHA256SUMS, manifest.json, manifest.json.sig)"
