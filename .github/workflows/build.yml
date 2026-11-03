@@ -37,6 +37,7 @@ jobs:
           if [ -n "$CORE_MANIFEST_KEY_PEM" ]; then
             printf '%s\n' "$CORE_MANIFEST_KEY_PEM" > "$RUNNER_TEMP/core-manifest-key.pem"
             chmod 600 "$RUNNER_TEMP/core-manifest-key.pem"
+            echo "CORE_MANIFEST_KEY=$RUNNER_TEMP/core-manifest-key.pem" >> "$GITHUB_ENV"
           else
             echo "CORE_MANIFEST_KEY secret not set — manifest will be UNSIGNED."
           fi
@@ -45,7 +46,6 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_API: '26'
-          CORE_MANIFEST_KEY: ${{ runner.temp }}/core-manifest-key.pem
         run: ./core-build/build-core.sh
 
       - name: Upload artifacts
