@@ -13,38 +13,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: '1.23'
 
       - name: Set up NDK
         id: ndk
-        uses: nttld/setup-ndk@v1
+        uses: nttld/setup-ndk@2817442ee7c3346c1eb7d2ec60263c93206ba14f # v1
         with:
           ndk-version: r27c
           add-to-path: false
+
+      - name: Write manifest signing key
+        # The private key lives in repo SECRETS (CORE_MANIFEST_KEY = full PEM).
+        # Never committed, never printed — only written to a temp file for the
+        # build script, which signs dist/manifest.json with it.
+        env:
+          CORE_MANIFEST_KEY_PEM: ${{ secrets.CORE_MANIFEST_KEY }}
+        run: |
+          if [ -n "$CORE_MANIFEST_KEY_PEM" ]; then
+            printf '%s
+' "$CORE_MANIFEST_KEY_PEM" > "$RUNNER_TEMP/core-manifest-key.pem"
+            chmod 600 "$RUNNER_TEMP/core-manifest-key.pem"
+          else
+            echo "CORE_MANIFEST_KEY secret not set — manifest will be UNSIGNED."
+          fi
 
       - name: Build patched cores
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_API: '26'
+          CORE_MANIFEST_KEY: ${{ runner.temp }}/core-manifest-key.pem
         run: ./core-build/build-core.sh
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: libmihomo-cores
           path: |
             core-build/dist/libmihomo-*.so
             core-build/dist/SHA256SUMS
+            core-build/dist/manifest.json
+            core-build/dist/manifest.json.sig
+
+      - name: Verify manifest signature
+        if: startsWith(github.ref, 'refs/tags/core-')
+        run: |
+          set -euo pipefail
+          if [ ! -f core-build/dist/manifest.json.sig ]; then
+            echo "::warning::manifest.json is UNSIGNED — the app's updater will refuse this release (fail-closed). Add the CORE_MANIFEST_KEY secret."
+            exit 0
+          fi
+          PUBLIC_KEY="$(mktemp)"
+          grep -A30 'CORE_UPDATE_PUBLIC_KEY' core-patch/README.md >/dev/null 2>&1 || true
+          openssl pkey -in "$RUNNER_TEMP/core-manifest-key.pem" -pubout -out "$PUBLIC_KEY"
+          openssl dgst -sha256 -verify "$PUBLIC_KEY" \
+            -signature core-build/dist/manifest.json.sig core-build/dist/manifest.json
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/core-')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             core-build/dist/libmihomo-*.so
             core-build/dist/SHA256SUMS
+            core-build/dist/manifest.json
+            core-build/dist/manifest.json.sig
