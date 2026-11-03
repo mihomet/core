@@ -35,8 +35,7 @@ jobs:
           CORE_MANIFEST_KEY_PEM: ${{ secrets.CORE_MANIFEST_KEY }}
         run: |
           if [ -n "$CORE_MANIFEST_KEY_PEM" ]; then
-            printf '%s
-' "$CORE_MANIFEST_KEY_PEM" > "$RUNNER_TEMP/core-manifest-key.pem"
+            printf '%s\n' "$CORE_MANIFEST_KEY_PEM" > "$RUNNER_TEMP/core-manifest-key.pem"
             chmod 600 "$RUNNER_TEMP/core-manifest-key.pem"
           else
             echo "CORE_MANIFEST_KEY secret not set — manifest will be UNSIGNED."
