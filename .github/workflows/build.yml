@@ -67,8 +67,12 @@ jobs:
             echo "::warning::manifest.json is UNSIGNED — the app's updater will refuse this release (fail-closed). Add the CORE_MANIFEST_KEY secret."
             exit 0
           fi
+          # Verify against the PUBLIC key compiled into the app
+          # (CoreConstants.CORE_UPDATE_PUBLIC_KEY_B64, SPKI DER, base64) -
+          # deriving it from the same PEM would be a tautology.
+          APP_PUB_B64="MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEArSeIeB3iARaOLRavfWdrYUOf5+UugXKu73fbVptyRCL6hRkmwoyy+0bJi0aWccxmuWY2ecuEa/vaDVAY7pyW9zGAlLTtQlJMinvFVMZL8U78IINpeSZKYc9uT8es139ZSAceChV7ChgWQG7gJ3mpQO7EcJnanMkpTtffF/ijHSQten1Yx7wnXa9aXsVhaA801GT5J3z5WxCcXLvyC/Ijwe0FVGRiad+FXzKWjAC/EfuHisBYqgD4hjA2ssMavKfjxRfTQKesGqfvRnoYlj5GhuVmL26IZkCnjvt3jUkJGsLCdsA6qoLyv6jwqWrBOlE+gK0alw7KMvbKhzzktP1dJsB2mnESQ5/zNiCCEbylAE8rUb7/3y7pKtV8bABvYlLQoE2zi8/OiU1HBx/0GlPuywfaHjg+I/pOkOm2H8cDa0sX7Vr7ikJRfdfVOjH/uhCYZtwicy0oOGF8saLKlj4qYzAB/hbI5qVrAaAbVaYt8rs9Ax1Fjc0vUAxHPnacDJ5qjw3LIDh9r9o/ZTC/7zQjEeAlTkAwlPC2sYl/bY4ix+gxRzBwP3eIoXfQHIbf1vou3vHbkoVm9qnAHTkdWe8Ztx2nlbYHDgECJJOTebkUSRiD+BI/L9hHlo1Dax2MdOYGHrJGQ3CKZTvLiUaUt/tVmdim6ag0J/4XtpZoOppaUykCAwEAAQ=="
           PUBLIC_KEY="$(mktemp)"
-          openssl pkey -in "$RUNNER_TEMP/core-manifest-key.pem" -pubout -out "$PUBLIC_KEY"
+          printf '%s' "$APP_PUB_B64" | base64 -d > "$PUBLIC_KEY"
           openssl dgst -sha256 -verify "$PUBLIC_KEY" \
             -signature core-build/dist/manifest.json.sig core-build/dist/manifest.json
 
