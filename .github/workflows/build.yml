@@ -68,7 +68,6 @@ jobs:
             exit 0
           fi
           PUBLIC_KEY="$(mktemp)"
-          grep -A30 'CORE_UPDATE_PUBLIC_KEY' core-patch/README.md >/dev/null 2>&1 || true
           openssl pkey -in "$RUNNER_TEMP/core-manifest-key.pem" -pubout -out "$PUBLIC_KEY"
           openssl dgst -sha256 -verify "$PUBLIC_KEY" \
             -signature core-build/dist/manifest.json.sig core-build/dist/manifest.json
