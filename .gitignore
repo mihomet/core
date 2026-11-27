@@ -1,0 +1,6 @@
+core-build/dist/
+__pycache__/
+*.pyc
+smoke-app/
+smoke-apks/
+core-smoke.log

@@ -14,7 +14,7 @@
 # support, so CGO_ENABLED=0 cannot produce it), with -tags with_gvisor (the
 # gVisor TUN stack, same tag as the official Makefile GOBUILD), -trimpath and
 # -w -s -buildid=. The version is stamped as constant.Version=<CORE_VERSION>.
-# The go toolchain is the one shipped inside the golang:1.23 docker image
+# The go toolchain is the one shipped inside the golang:1.26 docker image
 # (GOTOOLCHAIN=local — no toolchain download).
 #
 # Host requirements: docker, git, file(1), sha256sum and the Android NDK
@@ -28,11 +28,12 @@
 set -euo pipefail
 
 UPSTREAM_REPO="https://github.com/MetaCubeX/mihomo.git"
-UPSTREAM_VERSION="v1.19.33"                # upstream tag to build from
+UPSTREAM_VERSION="${UPSTREAM_VERSION:-v1.19.33}"                # upstream tag to build from
 # Version stamp baked into constant.Version; overridable via env. The stamp
 # must match the GitHub release tag the built artifacts are published under.
 CORE_VERSION="${CORE_VERSION:-v1.19.33-mihomet.3}"
-GO_IMAGE="golang:1.23"
+GO_IMAGE="${GO_IMAGE:-golang:1.26}"
+RELEASE_TAG="${CORE_RELEASE_TAG:-core-$CORE_VERSION}"
 ANDROID_API="${ANDROID_API:-26}"           # minSdk of the app: binaries must run on Android 8+
 NDK_HOST_TAG="linux-x86_64"
 
@@ -55,7 +56,7 @@ docker info >/dev/null 2>&1 || die "docker daemon is not reachable"
 
 # Locate the Android NDK (needed for cgo linking of all android targets).
 # CI: nttld/setup-ndk exports ANDROID_NDK_HOME; locally: ~/Android/ndk or NDK_HOME.
-NDK_HOME="${NDK_HOME:-}"
+NDK_HOME="${NDK_HOME:-${ANDROID_NDK_HOME:-}}"
 if [ -z "$NDK_HOME" ]; then
   for d in "$HOME"/Android/ndk/android-ndk-* "${ANDROID_HOME:-/nonexistent}"/ndk/*; do
     [ -d "$d" ] && NDK_HOME="$d"
@@ -65,11 +66,20 @@ fi
 NDK_TOOLCHAIN="/ndk/toolchains/llvm/prebuilt/$NDK_HOST_TAG"
 [ -x "$NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST_TAG/bin/clang" ] \
   || die "invalid NDK layout: $NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST_TAG"
+[[ "$UPSTREAM_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "upstream must be a stable vX.Y.Z tag"
+[[ "$CORE_VERSION" =~ ^${UPSTREAM_VERSION//./\\.}-mihomet\.[0-9]+$ ]] || die "invalid core version: $CORE_VERSION"
+[ "$RELEASE_TAG" = "core-$CORE_VERSION" ] || die "release tag and binary version disagree"
+[ "$ANDROID_API" = "26" ] || die "Android API must stay 26 (Mihomet minSdk)"
 log "Using NDK: $NDK_HOME (API $ANDROID_API)"
 
 log "Cloning mihomo $UPSTREAM_VERSION into $WORK_DIR/mihomo"
 git clone --depth 1 --branch "$UPSTREAM_VERSION" "$UPSTREAM_REPO" "$WORK_DIR/mihomo" \
   || die "failed to clone $UPSTREAM_REPO ($UPSTREAM_VERSION)"
+
+UPSTREAM_SHA="$(git -C "$WORK_DIR/mihomo" rev-parse HEAD)"
+if [ -n "${UPSTREAM_COMMIT:-}" ] && [ "$UPSTREAM_SHA" != "$UPSTREAM_COMMIT" ]; then
+  die "upstream tag moved after resolution: expected $UPSTREAM_COMMIT, got $UPSTREAM_SHA"
+fi
 
 # Deterministic build time: the upstream commit date of the built tag.
 BUILDTIME="$(git -C "$WORK_DIR/mihomo" log -1 --format=%cI)"
@@ -81,6 +91,7 @@ git -C "$WORK_DIR/mihomo" apply "$PATCH_FILE"
 log "Patch applied: $(git -C "$WORK_DIR/mihomo" diff --stat | tail -1)"
 
 mkdir -p "$OUT_DIR" "$WORK_DIR/out"
+rm -f "$OUT_DIR/manifest.json.sig"
 
 # abi name -> goarch [goarm] [ndk-clang-target]; matches the Android ABIs and
 # the app's jniLibs layout (arm64-v8a / armeabi-v7a / x86_64).
@@ -114,8 +125,9 @@ build_abi() {
         -X \"github.com/metacubex/mihomo/constant.BuildTime=$BUILDTIME\" \
         -w -s -buildid=" \
       -o "/work/out/libmihomo-$abi.so" .
-  mv "$WORK_DIR/out/libmihomo-$abi.so" "$out"
-  chmod 0755 "$out"
+  # Docker owns its output as root. Copying creates a runner-owned artifact;
+  # chmod on a moved root-owned file fails on GitHub-hosted runners.
+  install -m 0755 "$WORK_DIR/out/libmihomo-$abi.so" "$out"
 }
 
 build_abi "arm64-v8a"   "arm64" ""  "aarch64-linux-android$ANDROID_API-clang"
@@ -142,16 +154,20 @@ ls -l libmihomo-*.so | sed 's/^/[mihomet-core]   /'
 # /secure/path/core-update-priv.pem matching the app's CORE_UPDATE_PUBLIC_KEY_B64)
 # to also produce manifest.json.sig; the manifest itself is always generated.
 MIN_APP_VERSION="${CORE_MIN_APP_VERSION:-1.2.1}"
-python3 - "$CORE_VERSION" "$MIN_APP_VERSION" > manifest.json <<'PYEOF'
-import json, sys, hashlib
-version, min_app = sys.argv[1], sys.argv[2]
+python3 - "$RELEASE_TAG" "$MIN_APP_VERSION" "$UPSTREAM_VERSION" "$UPSTREAM_SHA" "$PATCH_FILE" "$REPO_ROOT" > manifest.json <<'PYEOF'
+import json, sys, hashlib, pathlib, subprocess
+version, min_app, upstream_tag, upstream_sha, patch_file, repository = sys.argv[1:]
+source = {"upstreamTag": upstream_tag, "upstreamCommit": upstream_sha,
+          "patchSha256": hashlib.sha256(pathlib.Path(patch_file).read_bytes()).hexdigest(),
+          "buildCommit": subprocess.check_output(["git", "-C", repository, "rev-parse", "HEAD"], text=True).strip(),
+          "androidApi": 26}
 artifacts = {}
 for abi in ("arm64-v8a", "armeabi-v7a", "x86_64"):
     f = f"libmihomo-{abi}.so"
     data = open(f, "rb").read()
     artifacts[abi] = {"file": f, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
 print(json.dumps({"schema": 1, "version": version, "minAppVersion": min_app,
-                  "artifacts": artifacts}, indent=2))
+                  "artifacts": artifacts, "source": source}, indent=2))
 PYEOF
 if [ -n "${CORE_MANIFEST_KEY:-}" ]; then
   [ -f "$CORE_MANIFEST_KEY" ] || die "CORE_MANIFEST_KEY set but file not found: $CORE_MANIFEST_KEY"
