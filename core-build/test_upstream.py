@@ -2,10 +2,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from sign_manifest import sign_manifest
 from upstream import ABIS, ASSETS, plan, stable_version, verify
 
 
@@ -87,6 +89,52 @@ class ArtifactVerifierTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 verify(self.dist, self.manifest["version"])
             self.assertIn("-verify", openssl.call_args[0][0])
+
+
+class ManifestSignerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name)
+        self.key = self.directory / "encrypted-key.pem"
+        self.public_key = self.directory / "public-key.pem"
+        self.manifest = self.directory / "manifest.json"
+        self.signature = self.directory / "manifest.json.sig"
+        self.manifest.write_text('{"version":"test"}\n')
+        self.password = "test-only-passphrase"
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048",
+             "-aes-256-cbc", "-pass", "env:TEST_KEY_PASSWORD", "-out", str(self.key)],
+            env=dict(os.environ, TEST_KEY_PASSWORD=self.password),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["openssl", "pkey", "-in", str(self.key), "-passin", "env:TEST_KEY_PASSWORD",
+             "-pubout", "-out", str(self.public_key)],
+            env=dict(os.environ, TEST_KEY_PASSWORD=self.password),
+            check=True,
+            capture_output=True,
+        )
+
+    def test_signs_encrypted_key_and_verifies_signature(self):
+        with patch.dict(os.environ, {"CORE_MANIFEST_KEY_PASSWORD": self.password}):
+            sign_manifest(self.key, self.manifest, self.signature)
+        subprocess.run(
+            ["openssl", "dgst", "-sha256", "-verify", str(self.public_key), "-signature",
+             str(self.signature), str(self.manifest)], check=True, capture_output=True,
+        )
+
+    def test_missing_or_wrong_password_fails_without_echoing_it(self):
+        for password in (None, "incorrect-test-passphrase"):
+            environment = os.environ.copy()
+            environment.pop("CORE_MANIFEST_KEY_PASSWORD", None)
+            if password is not None:
+                environment["CORE_MANIFEST_KEY_PASSWORD"] = password
+            with patch.dict(os.environ, environment, clear=True):
+                with self.assertRaisesRegex(ValueError, "CORE_MANIFEST_KEY_PASSWORD") as error:
+                    sign_manifest(self.key, self.manifest, self.signature)
+            self.assertNotIn("incorrect-test-passphrase", str(error.exception))
 
 
 if __name__ == "__main__":

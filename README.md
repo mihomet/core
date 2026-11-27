@@ -58,7 +58,9 @@ physical ARM devices or root/TProxy hardware.
 
 Only after both device jobs succeed does the publish job load the existing
 `CORE_MANIFEST_KEY` secret, sign the manifest and verify it against the public key
-already trusted by the app. Missing or mismatched signing keys fail publication.
+already trusted by the app. Encrypted PEM keys use the optional
+`CORE_MANIFEST_KEY_PASSWORD` secret. A missing password, missing key, or mismatched
+signing key fails publication with a diagnostic that does not reveal the password.
 The signed manifest records the upstream commit, build commit, patch SHA-256 and
 Android API. Releases include all `.so` files, `SHA256SUMS`, `manifest.json` and
 `manifest.json.sig`. The manifest version equals the `core-vX.Y.Z-mihomet.N` tag;

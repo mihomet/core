@@ -171,8 +171,9 @@ print(json.dumps({"schema": 1, "version": version, "minAppVersion": min_app,
 PYEOF
 if [ -n "${CORE_MANIFEST_KEY:-}" ]; then
   [ -f "$CORE_MANIFEST_KEY" ] || die "CORE_MANIFEST_KEY set but file not found: $CORE_MANIFEST_KEY"
-  openssl dgst -sha256 -sign "$CORE_MANIFEST_KEY" -out manifest.json.sig manifest.json
-  log "Manifest signed (key: $CORE_MANIFEST_KEY)"
+  python3 "$SCRIPT_DIR/sign_manifest.py" "$CORE_MANIFEST_KEY" manifest.json manifest.json.sig \
+    || die "manifest signing failed; for an encrypted key set CORE_MANIFEST_KEY_PASSWORD"
+  log "Manifest signed"
 else
   log "WARNING: CORE_MANIFEST_KEY not set — manifest.json is UNSIGNED. Sign it with"
   log "         the mihomet app repo script scripts/sign-core-manifest.sh before release!"
