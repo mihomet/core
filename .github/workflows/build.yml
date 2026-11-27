@@ -162,6 +162,7 @@ jobs:
       - name: Sign manifest after the Android checks
         env:
           CORE_MANIFEST_KEY_PEM: ${{ secrets.CORE_MANIFEST_KEY }}
+          CORE_MANIFEST_KEY_PASSWORD: ${{ secrets.CORE_MANIFEST_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           test -n "$CORE_MANIFEST_KEY_PEM" || { echo '::error::CORE_MANIFEST_KEY is required'; exit 1; }
@@ -169,7 +170,7 @@ jobs:
           trap 'rm -f "$SIGNING_FILE"' EXIT
           umask 077
           printf '%s\n' "$CORE_MANIFEST_KEY_PEM" > "$SIGNING_FILE"
-          openssl dgst -sha256 -sign "$SIGNING_FILE" -out core-build/dist/manifest.json.sig core-build/dist/manifest.json
+          python3 core-build/sign_manifest.py "$SIGNING_FILE" core-build/dist/manifest.json core-build/dist/manifest.json.sig
           REQUIRE_SIGNATURE=true python3 core-build/upstream.py verify core-build/dist "$CORE_RELEASE_TAG"
       - name: Publish immutable candidate
         env:
